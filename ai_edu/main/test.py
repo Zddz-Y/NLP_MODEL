@@ -335,35 +335,35 @@ def load_questions_and_answers() -> List[Dict]:
         return []
     
     # 注释掉答案文件检查
-    # if not os.path.exists(ANSWERS_JSON):
-    #     print(f"错误: 答案文件不存在 - {ANSWERS_JSON}")
-    #     return []
+    if not os.path.exists(ANSWERS_JSON):
+        print(f"错误: 答案文件不存在 - {ANSWERS_JSON}")
+        return []
     
     # 加载题目数据
     with open(QUESTIONS_JSON, 'r', encoding='utf-8') as f:
         questions_data = json.load(f)
     print(f"加载了 {len(questions_data)} 道题目")
     
-    # # 加载答案数据
-    # with open(ANSWERS_JSON, 'r', encoding='utf-8') as f:
-    #     answers_data = json.load(f)
-    # print(f"加载了 {len(answers_data)} 个答案")
+    # 加载答案数据
+    with open(ANSWERS_JSON, 'r', encoding='utf-8') as f:
+        answers_data = json.load(f)
+    print(f"加载了 {len(answers_data)} 个答案")
     
     # 合并题目和答案
     questions = []
     for i, question in enumerate(questions_data):
-        # # 获取对应的答案
-        # answer = answers_data[i] if i < len(answers_data) else None
+        # 获取对应的答案
+        answer = answers_data[i] if i < len(answers_data) else None
         
         merged_question = {
             "id": i + 1,
             "question_data": question,
-            # "answer_data": answer,
+            "answer_data": answer,
             "content": question.get("content", ""),
             "question_images": extract_image_placeholders(question),
-            # "answer_images": extract_image_placeholders(answer) if answer else [],
-            # "type": "question_with_answer_from_json"
-            "type": "question_only"
+            "answer_images": extract_image_placeholders(answer) if answer else [],
+            "type": "question_with_answer_from_json"
+            # "type": "question_only"
         }
         questions.append(merged_question)
     
@@ -438,25 +438,25 @@ def build_question_block(q: Dict) -> str:
 
 def build_answer_block(q: Dict) -> str:
     """构建答案内容块"""
-    return ""
-    # answer_data = q.get("answer_data", {})
-    # if not answer_data:
-    #     return "无答案数据"
+    # return ""
+    answer_data = q.get("answer_data", {})
+    if not answer_data:
+        return "无答案数据"
     
-    # answer_content = "答案内容："
+    answer_content = "答案内容："
     
-    # # 添加答案文本
-    # answer_text = answer_data.get("answer", "") or answer_data.get("content", "") or answer_data.get("text", "")
-    # if answer_text:
-    #     answer_content += f"\n{answer_text}"
+    # 添加答案文本
+    answer_text = answer_data.get("answer", "") or answer_data.get("content", "") or answer_data.get("text", "")
+    if answer_text:
+        answer_content += f"\n{answer_text}"
     
-    # # 添加答案图片
-    # if q.get("answer_images"):
-    #     answer_content += "\n\n答案图片："
-    #     for i, img in enumerate(q["answer_images"], 1):
-    #         answer_content += f"\n{i}. [IMG:{img}]"
+    # 添加答案图片
+    if q.get("answer_images"):
+        answer_content += "\n\n答案图片："
+        for i, img in enumerate(q["answer_images"], 1):
+            answer_content += f"\n{i}. [IMG:{img}]"
     
-    # return answer_content
+    return answer_content
 
 def call_llm_with_tools(prompt: str, max_retry: int = 3) -> str:
     """调用支持工具的LLM - 支持从images目录读取图片"""
@@ -690,15 +690,15 @@ def main():
                     else:
                         print(f"  ✗ {img} 不存在")
             
-            # if q.get('answer_images'):
-            #     print(f"答案图片: {', '.join(q['answer_images'])}")
-            #     for img in q['answer_images']:
-            #         img_path = os.path.join(IMAGES_DIR, img)
-            #         if os.path.exists(img_path):
-            #             img_size = os.path.getsize(img_path)
-            #             print(f"  ✓ {img} 存在 (大小: {img_size/1024:.1f}KB)")
-            #         else:
-            #             print(f"  ✗ {img} 不存在")
+            if q.get('answer_images'):
+                print(f"答案图片: {', '.join(q['answer_images'])}")
+                for img in q['answer_images']:
+                    img_path = os.path.join(IMAGES_DIR, img)
+                    if os.path.exists(img_path):
+                        img_size = os.path.getsize(img_path)
+                        print(f"  ✓ {img} 存在 (大小: {img_size/1024:.1f}KB)")
+                    else:
+                        print(f"  ✗ {img} 不存在")
             
             # 跳过已经处理过的题目
             if q.get('label') and q['label'].get('D1_L2') not in ['未分类', '处理失败', '解析失败']:
@@ -707,10 +707,10 @@ def main():
             
             # 构建包含题目和答案的prompt
             question_block = build_question_block(q)
-            # answer_block = build_answer_block(q)  # 注释掉答案块构建
+            answer_block = build_answer_block(q)  # 注释掉答案块构建
             prompt = PROMPT_TMPL.format(
                 QUESTION_BLOCK=question_block,
-                # ANSWER_BLOCK=answer_block  # 答案块
+                ANSWER_BLOCK=answer_block  # 答案块
             )
             
             print("调用LLM进行标注...")
