@@ -421,55 +421,256 @@ def extract_doc_content(doc_path):
     return questions, metadata
 
 def prepare_final_questions(questions):
-    """准备最终的问题列表，合并重复的子题目答案"""
+    """准备最终的问题列表，将小问详解放到对应小题answers中，每个小题只有对应的答案分析和详解"""
     final_questions = []
     
     for q in questions:
         if "sub_questions" in q and q["sub_questions"]:
-            # 有子问题，需要合并重复的子题目
+            # 有子问题，处理子题目
             merged_sub_questions = {}
-            main_answers = []
+            all_answers_content = q["answers"] if q["answers"] else ""  # 收集所有答案内容
             
-            # 遍历所有子题目，按ID合并
+            # 1. 遍历所有子题目，初始化合并字典
             for sub_q in q["sub_questions"]:
                 sub_id = sub_q["id"]
                 sub_number = sub_q["number"]
                 
-                if sub_id not in merged_sub_questions:
+                # 关键修改：优先保留有内容的子题目，跳过空的重复子题目
+                if sub_id in merged_sub_questions:
+                    existing_sub = merged_sub_questions[sub_id]
+                    # 如果现有的子题目已经有内容，而当前子题目是空的，则跳过
+                    if (existing_sub["content"] or existing_sub["answers"]) and not (sub_q["content"] or sub_q["answers"]):
+                        continue
+                    # 如果现有的是空的，而当前有内容，则用当前的替换
+                    elif not (existing_sub["content"] or existing_sub["answers"]) and (sub_q["content"] or sub_q["answers"]):
+                        merged_sub_questions[sub_id] = {
+                            "id": sub_id,
+                            "number": sub_number,
+                            "content": sub_q["content"],
+                            "options": sub_q["options"].copy() if sub_q["options"] else [],
+                            "answers": ""
+                        }
+                    # 如果都有内容，则合并
+                    elif sub_q["content"] or sub_q["answers"]:
+                        # 合并内容，避免重复
+                        if sub_q["content"] and sub_q["content"] not in merged_sub_questions[sub_id]["content"]:
+                            if merged_sub_questions[sub_id]["content"]:
+                                merged_sub_questions[sub_id]["content"] += "\n" + sub_q["content"]
+                            else:
+                                merged_sub_questions[sub_id]["content"] = sub_q["content"]
+                        
+                        # 合并选项
+                        for opt in sub_q["options"]:
+                            if opt not in merged_sub_questions[sub_id]["options"]:
+                                merged_sub_questions[sub_id]["options"].append(opt)
+                else:
+                    # 新的子题目ID
                     merged_sub_questions[sub_id] = {
                         "id": sub_id,
                         "number": sub_number,
                         "content": sub_q["content"],
-                        "options": sub_q["options"],
-                        "answers": ""
+                        "options": sub_q["options"].copy() if sub_q["options"] else [],
+                        "answers": ""  # 每个小题都有answers字段
                     }
                 
-                # 合并答案内容
-                if sub_q["answers"]:
+                # 直接将子题目的答案分配给对应小题
+                if sub_q["answers"] and sub_q["answers"].strip():
                     if merged_sub_questions[sub_id]["answers"]:
-                        merged_sub_questions[sub_id]["answers"] += sub_q["answers"]
+                        merged_sub_questions[sub_id]["answers"] += "\n" + sub_q["answers"]
                     else:
                         merged_sub_questions[sub_id]["answers"] = sub_q["answers"]
+                
+                # 收集所有答案内容用于后续处理
+                if sub_q["answers"] and sub_q["answers"].strip():
+                    all_answers_content += "\n" + sub_q["answers"]
             
-            # 提取主题目的答案（通常是最后的点睛部分）
-            main_answer_content = ""
-            for sub_q in q["sub_questions"]:
-                if "【点睛】" in sub_q["answers"]:
-                    # 提取点睛部分作为主题目答案
-                    point_start = sub_q["answers"].find("【点睛】")
-                    main_answer_content = sub_q["answers"][point_start:]
-                    break
+            # 2. 智能分配【小问X详解】到对应小题
+            for sub_number in range(1, 100):
+                detail_marker = f"【小问{sub_number}详解】"
+                
+                if detail_marker in all_answers_content:
+                    start_idx = all_answers_content.find(detail_marker)
+                    end_idx = -1
+                    
+                    # 寻找下一个【小问X详解】标记作为结束位置
+                    next_detail_found = False
+                    for next_num in range(sub_number + 1, 100):
+                        next_marker = f"【小问{next_num}详解】"
+                        if next_marker in all_answers_content:
+                            next_pos = all_answers_content.find(next_marker)
+                            if next_pos > start_idx:
+                                end_idx = next_pos
+                                next_detail_found = True
+                                break
+                    
+                    # 如果没找到下一个详解标记，寻找【点睛】作为结束
+                    if not next_detail_found:
+                        point_marker = "【点睛】"
+                        # 重要修改：从当前详解标记位置开始查找【点睛】
+                        point_search_start = start_idx + len(detail_marker)
+                        point_pos = all_answers_content.find(point_marker, point_search_start)
+                        if point_pos != -1:
+                            end_idx = point_pos
+                    
+                    # 提取该小题的详解内容
+                    if end_idx != -1:
+                        detail_content = all_answers_content[start_idx:end_idx].strip()
+                    else:
+                        # 关键修改：如果没有找到任何结束标记，取到文档末尾
+                        detail_content = all_answers_content[start_idx:].strip()
+                        
+                        # 但要移除可能的【点睛】部分（如果在内容末尾）
+                        if "【点睛】" in detail_content:
+                            point_idx = detail_content.find("【点睛】")
+                            detail_content = detail_content[:point_idx].strip()
+                    
+                    # 确保detail_content不为空且有实际内容
+                    if detail_content and len(detail_content.strip()) > 5:
+                        # 分配到对应的小题，确保不重复添加
+                        for sub_id, sub_q in merged_sub_questions.items():
+                            if sub_q["number"] == sub_number:
+                                # 检查是否已经包含这个详解内容
+                                if detail_marker not in sub_q["answers"] and detail_content not in sub_q["answers"]:
+                                    if sub_q["answers"]:
+                                        sub_q["answers"] += "\n" + detail_content
+                                    else:
+                                        sub_q["answers"] = detail_content
+                                break
+                    print(f"已分配 {detail_content} 到小题 {sub_number} 的答案中")
             
-            # 按number排序子题目
+            # 3. 处理【答案】(X)等标记格式，只分配给对应小题
+            answer_patterns = [
+                (r'【答案】\s*（(\d+)）', r'【答案】\s*（\d+）'),  # 【答案】（1）
+                (r'【答案】\s*\((\d+)\)', r'【答案】\s*\(\d+\)'),   # 【答案】(1)
+                (r'（(\d+)）\s*【答案】', r'（\d+）\s*【答案】'),   # （1）【答案】
+                (r'\((\d+)\)\s*【答案】', r'\(\d+\)\s*【答案】')    # (1)【答案】
+            ]
+            
+            for extract_pattern, find_pattern in answer_patterns:
+                matches = list(re.finditer(extract_pattern, all_answers_content))
+                for match in matches:
+                    sub_number = int(match.group(1))
+                    start_idx = match.start()
+                    
+                    # 寻找下一个相同格式的标记或其他分割标记
+                    next_matches = list(re.finditer(find_pattern, all_answers_content[start_idx + 1:]))
+                    if next_matches:
+                        end_idx = start_idx + 1 + next_matches[0].start()
+                    else:
+                        # 寻找【小问X详解】或【点睛】作为结束
+                        next_section = re.search(r'【(小问\d+详解|点睛|详解)】', all_answers_content[start_idx + 1:])
+                        if next_section:
+                            end_idx = start_idx + 1 + next_section.start()
+                        else:
+                            end_idx = len(all_answers_content)
+                    
+                    answer_content = all_answers_content[start_idx:end_idx].strip()
+                    
+                    # 只分配给对应编号的小题
+                    for sub_id, sub_q in merged_sub_questions.items():
+                        if sub_q["number"] == sub_number:
+                            # 检查是否已经包含类似内容
+                            if not any(marker in sub_q["answers"] for marker in ["【答案】", "（" + str(sub_number) + "）"]):
+                                if sub_q["answers"]:
+                                    sub_q["answers"] += "\n" + answer_content
+                                else:
+                                    sub_q["answers"] = answer_content
+                            break
+            
+            # 4. 处理简单的(1)、(2)等标记，只在小题缺少答案时使用
+            sub_patterns = [
+                r'\(\s*(\d+)\s*\)',  # (1)
+                r'（\s*(\d+)\s*）'    # （1）
+            ]
+            
+            for pattern in sub_patterns:
+                matches = list(re.finditer(pattern, all_answers_content))
+                for i, match in enumerate(matches):
+                    sub_number = int(match.group(1))
+                    start_pos = match.start()
+                    
+                    # 检查对应的小题是否已有足够的答案内容
+                    target_sub = None
+                    for sub_id, sub_q in merged_sub_questions.items():
+                        if sub_q["number"] == sub_number:
+                            target_sub = sub_q
+                            break
+                    
+                    # 只有当小题缺少答案或答案很短时才添加
+                    if target_sub and (not target_sub["answers"] or len(target_sub["answers"]) < 50):
+                        # 找结束位置（下一个数字标记或结尾）
+                        if i < len(matches) - 1:
+                            end_pos = matches[i+1].start()
+                        else:
+                            end_pos = len(all_answers_content)
+                        
+                        content = all_answers_content[start_pos:end_pos].strip()
+                        
+                        # 过滤掉已经处理过的内容
+                        if any(marker in content for marker in ["【小问", "【答案】", "【点睛】"]):
+                            continue
+                        
+                        # 分配给对应小题
+                        if content not in target_sub["answers"]:
+                            if target_sub["answers"]:
+                                target_sub["answers"] += "\n" + content
+                            else:
+                                target_sub["answers"] = content
+            
+            # 5. 最终清理：确保每个小题只包含自己的内容
+            for sub_id, sub_q in merged_sub_questions.items():
+                if sub_q["answers"]:
+                    current_answers = sub_q["answers"]
+                    current_sub_number = sub_q["number"]
+                    
+                    # 移除【点睛】部分（属于大题）
+                    if "【点睛】" in current_answers:
+                        point_idx = current_answers.find("【点睛】")
+                        current_answers = current_answers[:point_idx].strip()
+                    
+                    # 主要修改：保留答案和分析，只删除其他小题的详解
+                    for other_num in range(1, 100):
+                        if other_num != current_sub_number:
+                            other_detail_marker = f"【小问{other_num}详解】"
+                            if other_detail_marker in current_answers:
+                                # 找出其他小题详解标记位置
+                                other_marker_start = current_answers.find(other_detail_marker)
+                                
+                                # 找出下一个详解标记或点睛标记作为结束
+                                next_marker_match = re.search(r'【小问\d+详解】|【点睛】', current_answers[other_marker_start + len(other_detail_marker):])
+                                if next_marker_match:
+                                    end_pos = other_marker_start + len(other_detail_marker) + next_marker_match.start()
+                                else:
+                                    # 如果没有下一个标记，查找下一个段落结束位置
+                                    end_pos = len(current_answers)
+                                    # 尝试找到该详解段落的结束位置
+                                    para_end = current_answers.find("\n\n", other_marker_start)
+                                    if para_end > other_marker_start:
+                                        end_pos = para_end
+                                
+                                # 只删除其他小题的详解部分，保留自己的答案和分析
+                                current_answers = current_answers[:other_marker_start] + current_answers[end_pos:]
+                    
+                    sub_q["answers"] = current_answers.strip()
+            
+            # 6. 提取【点睛】部分作为大题的答案
+            main_answer = ""
+            point_marker = "【点睛】"
+            if point_marker in all_answers_content:
+                point_idx = all_answers_content.find(point_marker)
+                main_answer = all_answers_content[point_idx:].strip()
+            
+            # 7. 按小题号排序
             sorted_sub_questions = sorted(merged_sub_questions.values(), key=lambda x: x["number"])
             
+            # 8. 组装最终的题目对象
             clean_q = {
                 "id": q["id"],
                 "number": q["number"],
                 "content": q["content"],
                 "options": q["options"],
-                "answers": main_answer_content,
-                "sub_questions": sorted_sub_questions
+                "sub_questions": sorted_sub_questions,  # sub_questions在前
+                "answers": main_answer  # 只有点睛部分作为主题目答案
             }
             
             final_questions.append(clean_q)
@@ -485,6 +686,7 @@ def prepare_final_questions(questions):
             final_questions.append(clean_q)
     
     return final_questions
+
 
 def process_document(doc_path, output_dir):
     """处理单个文档并保存结果"""
@@ -525,7 +727,7 @@ if __name__ == "__main__":
     output_dir = r"E:\NLP_Model\ai_edu\data\processed_data\answers"
     
     # 测试特定文件
-    test_file = "江苏省徐州市2020年中考数学试题（解析版）.docx"
+    test_file = "江苏省徐州市2020年中考数学试题（解析版）1.docx"
     test_file_path = os.path.join(input_dir, test_file)
     
     if os.path.exists(test_file_path):
