@@ -677,7 +677,7 @@ def prepare_final_questions(questions):
                         point_idx = current_answers.find("【点睛】")
                         current_answers = current_answers[:point_idx].strip()
                     
-                    # 新增：严格过滤答案内容，只保留当前小题的答案
+                    # 修改：更精确的过滤逻辑，保留当前小题的【答案】
                     lines = current_answers.split('\n')
                     filtered_lines = []
                     
@@ -686,37 +686,49 @@ def prepare_final_questions(questions):
                         if not line:
                             continue
                         
-                        # 检查是否包含其他小题的标记（更严格的过滤）
-                        other_sub_matches = re.findall(r'（(\d+)）|【答案】.*?（(\d+)）', line)
-                        has_other_sub = False
+                        # 检查是否包含其他小题编号的内容
+                        should_keep = True
                         
-                        for match in other_sub_matches:
-                            # match 是元组，可能是 ('1', '') 或 ('', '2') 的形式
-                            for num_str in match:
-                                if num_str and int(num_str) != current_sub_number:
-                                    has_other_sub = True
-                                    break
-                            if has_other_sub:
-                                break
+                        # 查找所有的小题编号标记
+                        sub_markers = re.findall(r'（(\d+)）', line)
+                        if sub_markers:
+                            # 如果行中包含小题编号，检查是否属于当前小题
+                            current_sub_found = False
+                            other_sub_found = False
+                            
+                            for num_str in sub_markers:
+                                num = int(num_str)
+                                if num == current_sub_number:
+                                    current_sub_found = True
+                                else:
+                                    other_sub_found = True
+                            
+                            # 如果包含其他小题编号但不包含当前小题编号，则跳过
+                            if other_sub_found and not current_sub_found:
+                                should_keep = False
                         
-                        # 只保留不包含其他小题标记的行，或明确属于当前小题的行
-                        if not has_other_sub:
-                            # 检查是否明确属于当前小题
-                            current_sub_pattern = f"（{current_sub_number}）"
-                            if current_sub_pattern in line or not re.search(r'（\d+）', line):
-                                # 进一步清理：移除行中其他小题的内容部分
-                                cleaned_line = line
-                                # 移除【答案】（其他数字）格式
-                                for other_num in range(1, 100):
-                                    if other_num != current_sub_number:
-                                        # 移除其他小题的答案标记
-                                        cleaned_line = re.sub(rf'【答案】（{other_num}）[^（]*', '', cleaned_line)
-                                # 移除（其他数字）开头的内容，但保留当前小题的
-                                if not line.startswith(f"（{current_sub_number}）"):
-                                    cleaned_line = re.sub(r'（(?!' + str(current_sub_number) + r')\d+）[^（]*', '', cleaned_line)
-                                
-                                if cleaned_line.strip():
-                                    filtered_lines.append(cleaned_line.strip())
+                        # 特殊处理：保留【答案】、【解析】、【详解】等关键标记
+                        if re.search(r'【(答案|解析|详解|解答|分析)】', line):
+                            should_keep = True
+                        
+                        if should_keep:
+                            # 清理行内容：只移除明确属于其他小题的部分
+                            cleaned_line = line
+                            
+                            # 移除其他小题的答案块（精确匹配）
+                            for other_num in range(1, 100):
+                                if other_num != current_sub_number:
+                                    # 只移除 "【答案】（其他数字）具体内容" 这种格式
+                                    pattern = rf'【答案】（{other_num}）[^；。]*[；。]?'
+                                    cleaned_line = re.sub(pattern, '', cleaned_line)
+                                    
+                                    # 移除以（其他数字）开头的完整句子
+                                    pattern = rf'（{other_num}）[^（）]*[；。]'
+                                    cleaned_line = re.sub(pattern, '', cleaned_line)
+                            
+                            cleaned_line = cleaned_line.strip()
+                            if cleaned_line:
+                                filtered_lines.append(cleaned_line)
                     
                     sub_q["answers"] = '\n'.join(filtered_lines).strip()
             
