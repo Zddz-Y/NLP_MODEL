@@ -77,19 +77,23 @@ def save_run_image(image_part, qid):
 
 def extract_images_from_runs(paragraph, doc, qid):
     segment = ""
+    processed_rids = set()  # 添加已处理的rId集合
+    
     for run in paragraph.runs:
         xml = run._element.xml
         text = run.text
-        # 文字
         if text:
             segment += text
-        # 图片
         
         rids = re.findall(r'(?:r:id|r:embed)="(rId\d+)"', xml)
         for rid in rids:
+            # 检查是否已处理过此rId
+            if rid in processed_rids:
+                continue
+            processed_rids.add(rid)
+            
             try:
                 if rid in doc.part.related_parts:
-                    # 处理图片
                     part = doc.part.related_parts[rid]
                     if part.content_type.startswith("image/"):
                         fname = save_run_image(part, qid)
@@ -164,7 +168,7 @@ def create_question_id(metadata, question_number, sub_question_number=None):
     base_id = f"{metadata['year']}-{metadata['province']}-{metadata['city']}-{metadata['subject']}-{metadata['exam_type']}-{question_number:02d}"
     
     if sub_question_number is not None:
-        return f"{base_id}-{sub_question_number:02d}"
+        return f"{base_id}-{sub_question_number:02d}" # 子问题题号补零
     
     return base_id
 
@@ -204,166 +208,211 @@ def extract_doc_content(doc_path):
         if element_type == 'paragraph':
             para = element
             raw = para.text.strip()
+            splits = re.split(r'(?=[（(][一二三四五六七八九十1234567890]+[）)])', raw)
             
-            # 检查本段是否新题号
-            m_q = re.match(r'^(\d+)\.', raw)
-            
-            # 检查是否是子题目
-            m_sub_q = re.search(r'[\(（](\d+)[\)）]', raw)
-            
-            if m_q:
-                # 新题目开始，重置状态
-                in_answer_section = False
-                current_answer_sub_number = None
-                
-                # 关闭上一个题
-                if current:
-                    questions.append(current)
-                qid = m_q.group(1)
-                question_id = create_question_id(metadata, int(qid))
-                
-                # 新题初始化
-                current = {
-                    "id": question_id,
-                    "number": int(qid),
-                    "content": "",
-                    "options": [],
-                    "answers": ""  # 添加答案字段
-                }
-                collecting = True
-            
-            # 处理子题目的情况
-            elif m_sub_q and current and collecting:
-                sub_qid = m_sub_q.group(1)
-                question_id = create_question_id(metadata, current["number"], int(sub_qid))
-                
-                # 先保存当前主题目
-                if current and "sub_questions" not in current:
-                    # 保存主题目的内容
-                    main_content = current["content"]
-                    main_options = current["options"]
+            for seg in splits:
+                seg = seg.strip()
+                if seg:
+                    # 检查本段是否新题号
+                    m_q = re.match(r'^(\d+)\.', seg)
+                    # 检查是否是子题目
+                    m_sub_q = re.match(r'[\(（](\d+)[\)）]', seg)
+
+                if m_q:
+                    # 新题目开始，重置状态
+                    in_answer_section = False
+                    current_answer_sub_number = None
                     
-                    # 重置主题目，添加子题目容器
-                    current["content"] = main_content  # 保留主题目的题干
-                    current["options"] = []
-                    current["sub_questions"] = []
+                    # 关闭上一个题
+                    if current:
+                        questions.append(current)
+                    qid = m_q.group(1)                     # 对应正则中 第一个括号 (\d+) 捕获的内容
+                    question_id = create_question_id(metadata, int(qid))
+                    
+                    # 新题初始化
+                    current = {
+                        "id": question_id,
+                        "number": int(qid),
+                        "content": "",
+                        "options": [],
+                        "answers": ""  # 添加答案字段
+                    }
+                    collecting = True
                 
-                # 添加新的子题目
-                sub_question = {
-                    "id": question_id,
-                    "number": int(sub_qid),
-                    "content": "",
-                    "options": [],
-                    "answers": ""  # 为子题目也添加答案字段
-                }
-                current["sub_questions"].append(sub_question)
-            
-            # 检查是否进入答案解析部分
-            if current and collecting:
-                # 识别答案解析的关键词和格式
-                answer_patterns = [
-                    r'^【答案】',
-                    r'^【解析】',
-                    r'^【解答】',
-                    r'^答案[:：]',
-                    r'^解析[:：]',
-                    r'^解答[:：]'
-                ]
+                # 处理子题目的情况
+                elif m_sub_q and current and collecting:
+                    sub_qid = m_sub_q.group(1)
+                    question_id = create_question_id(metadata, current["number"], int(sub_qid))
+                    
+                    # 先保存当前主题目
+                    if current and "sub_questions" not in current:
+                        # 保存主题目的内容
+                        main_content = current["content"]
+                        main_options = current["options"]
+                        
+                        # 重置主题目，添加子题目容器
+                        current["content"] = main_content  # 保留主题目的题干
+                        current["options"] = []
+                        current["sub_questions"] = []
+                    
+                    # 添加新的子题目
+                    sub_question = {
+                        "id": question_id,
+                        "number": int(sub_qid),
+                        "content": "",
+                        "options": [],
+                        "answers": ""  # 为子题目也添加答案字段
+                    }
+                    current["sub_questions"].append(sub_question)
                 
-                # 检查是否包含小题号的答案格式
-                sub_answer_patterns = [
-                    r'^\(\s*(\d+)\s*\).*?【答案】',
-                    r'^\(\s*(\d+)\s*\).*?【解析】',
-                    r'^\(\s*(\d+)\s*\).*?【解答】',
-                    r'^\(\s*(\d+)\s*\).*?答案',
-                    r'^\(\s*(\d+)\s*\).*?解析',
-                    r'^(\d+)\..*?【答案】',
-                    r'^(\d+)\..*?【解析】',
-                    r'^(\d+)\..*?【解答】'
-                ]
-                
-                # 检查是否是带小题号的答案
-                sub_answer_match = None
-                for pattern in sub_answer_patterns:
-                    sub_answer_match = re.search(pattern, raw)
-                    if sub_answer_match:
-                        current_answer_sub_number = int(sub_answer_match.group(1))
-                        in_answer_section = True
-                        break
-                
-                # 检查是否是普通的答案开始
-                if not sub_answer_match:
-                    is_answer_line = any(re.search(pattern, raw) for pattern in answer_patterns)
-                    if is_answer_line:
-                        in_answer_section = True
-                        current_answer_sub_number = None  # 重置小题号
-                    elif not in_answer_section and len(raw) < 10 and ('答案' in raw or '解析' in raw):
-                        # 单独的"答案"或"解析"标题行
-                        in_answer_section = True
-                        current_answer_sub_number = None
-                        continue  # 跳过标题行本身
-            
-            if not collecting or current is None:
-                continue
-
-            # 按 run 遍历，构造本段 content 片段
-            segment = extract_images_from_runs(para, doc, current["id"])
-
-            # 去除纯空白段
-            if not segment.strip():
-                continue
-
-            # 判断是否为选项行
-            m_opt = re.match(r'^[A-D]\.', segment.strip())
-            
-            # 确定应该添加内容到主题目还是子题目
-            target = current
-            
-            if in_answer_section:
-                # 在答案解析部分，根据小题号确定目标
-                if current_answer_sub_number is not None and "sub_questions" in current:
-                    # 查找对应小题号的子题目
-                    target_sub = None
-                    for sub_q in current["sub_questions"]:
-                        if sub_q["number"] == current_answer_sub_number:
-                            target_sub = sub_q
+                # 检查是否进入答案解析部分
+                if current and collecting:
+                    # 识别答案解析的关键词和格式
+                    answer_patterns = [
+                        r'^【答案】',
+                        r'^【解析】',
+                        r'^【解答】',
+                        r'^答案[:：]',
+                        r'^解析[:：]',
+                        r'^解答[:：]'
+                    ]
+                    
+                    # 检查是否包含小题号的答案格式
+                    sub_answer_patterns = [
+                        r'^\(\s*(\d+)\s*\).*?【答案】',
+                        r'^\(\s*(\d+)\s*\).*?【解析】',
+                        r'^\(\s*(\d+)\s*\).*?【解答】',
+                        r'^\(\s*(\d+)\s*\).*?答案',
+                        r'^\(\s*(\d+)\s*\).*?解析',
+                        r'^(\d+)\..*?【答案】',
+                        r'^(\d+)\..*?【解析】',
+                        r'^(\d+)\..*?【解答】'
+                    ]
+                    
+                    # 检查是否是带小题号的答案
+                    sub_answer_match = None
+                    for pattern in sub_answer_patterns:
+                        sub_answer_match = re.search(pattern, seg)
+                        if sub_answer_match:
+                            current_answer_sub_number = int(sub_answer_match.group(1)) # 提取小题号并转为整数
+                            in_answer_section = True
                             break
                     
-                    if target_sub:
-                        target = target_sub
+                    # 检查是否是普通的答案开始
+                    if not sub_answer_match:
+                        is_answer_line = any(re.search(pattern, seg) for pattern in answer_patterns) # 任意一个返回非空值，设为True
+                        if is_answer_line:
+                            in_answer_section = True
+                            current_answer_sub_number = None  # 重置小题号
+                        elif not in_answer_section and len(seg) < 10 and ('答案' in seg or '解析' in seg):
+                            # 单独的"答案"或"解析"标题行
+                            in_answer_section = True
+                            current_answer_sub_number = None
+                            continue  # 跳过标题行本身
+                
+                if not collecting or current is None:
+                    continue
+
+                # 按 run 遍历，构造本段 content 片段
+                segment = extract_images_from_runs(para, doc, current["id"])
+
+                # 去除纯空白段
+                if not segment.strip():
+                    continue
+
+                # 判断是否为选项行
+                m_opt = re.match(r'^[A-D]\.', segment.strip())
+
+                # 确定应该添加内容到主题目还是子题目
+                target = current
+
+                if in_answer_section:
+                    # 在答案解析部分的逻辑保持不变
+                    if current_answer_sub_number is not None and "sub_questions" in current:
+                        target_sub = None
+                        for sub_q in current["sub_questions"]:
+                            if sub_q["number"] == current_answer_sub_number:
+                                target_sub = sub_q
+                                break
+                        if target_sub:
+                            target = target_sub
+                        else:
+                            target = current
                     else:
-                        # 如果找不到对应的小题，添加到主题目
-                        target = current
-                else:
-                    # 没有指定小题号，添加到最后一个子题目或主题目
+                        if "sub_questions" in current and current["sub_questions"]:
+                            target = current["sub_questions"][-1]
+                        else:
+                            target = current
+                    
+                    # 添加到answers字段
+                    if target["answers"]:
+                        target["answers"] += "\n" + segment
+                    else:
+                        target["answers"] = segment
+                        
+                elif m_opt:
+                    # 选项内容，添加到当前活跃的题目
                     if "sub_questions" in current and current["sub_questions"]:
                         target = current["sub_questions"][-1]
-                    else:
-                        target = current
-                
-                # 添加到answers字段
-                if target["answers"]:
-                    target["answers"] += "\n" + segment
+                    target["options"].append({
+                        "text": segment.strip()
+                    })
                 else:
-                    target["answers"] = segment
+                    # 普通题干内容 - 关键修改：根据内容判断归属
+                    # 检查内容是否包含小题标记
+                    sub_content_match = re.search(r'[（(](\d+)[）)]', segment)
                     
-            elif m_opt:
-                # 选项内容，添加到当前活跃的题目
-                if "sub_questions" in current and current["sub_questions"]:
-                    target = current["sub_questions"][-1]
-                target["options"].append({
-                    "text": segment.strip()
-                })
-            else:
-                # 普通题干内容
-                if "sub_questions" in current and current["sub_questions"]:
-                    target = current["sub_questions"][-1]
-                
-                if target["content"]:
-                    target["content"] += "\n" + segment
-                else:
-                    target["content"] = segment
-        
+                    if sub_content_match:
+                        sub_num = int(sub_content_match.group(1))
+                        # 查找对应编号的子题目
+                        target_found = False
+                        if "sub_questions" in current:
+                            for sub_q in current["sub_questions"]:
+                                if sub_q["number"] == sub_num:
+                                    target = sub_q
+                                    target_found = True
+                                    break
+                        
+                        # 如果没找到对应的子题目，添加到主题目
+                        if not target_found:
+                            target = current
+                    else:
+                        # 没有小题标记的内容
+                        # 如果主题目内容为空，添加到主题目；否则添加到最后一个子题目
+                        if not current["content"] and "sub_questions" not in current:
+                            target = current
+                        elif "sub_questions" in current and current["sub_questions"]:
+                            target = current["sub_questions"][-1]
+                        else:
+                            target = current
+                    
+                    # 过滤内容：确保主题目不包含小题内容，小题不包含其他小题内容
+                    if target == current:
+                        # 主题目：移除所有小题标记的内容
+                        clean_segment = re.sub(r'[（(]\d+[）)][^（(]*', '', segment).strip()
+                        if clean_segment:
+                            if target["content"]:
+                                target["content"] += "\n" + clean_segment
+                            else:
+                                target["content"] = clean_segment
+                    else:
+                        # 子题目：只保留对应编号的内容
+                        target_num = target["number"]
+                        # 提取该小题对应的内容
+                        pattern = rf'[（(]{target_num}[）)][^（(]*?(?=[（(]\d+[）)]|$)'
+                        matches = re.findall(pattern, segment)
+                        if matches:
+                            clean_content = matches[0].strip()
+                        else:
+                            # 如果没有匹配到特定格式，但确定是该小题的内容，则使用原内容
+                            clean_content = segment.strip()
+                        
+                        if clean_content:
+                            if target["content"]:
+                                target["content"] += "\n" + clean_content
+                            else:
+                                target["content"] = clean_content
+            
         elif element_type == 'table':
             table = element
             if collecting and current is not None:
@@ -607,7 +656,7 @@ def prepare_final_questions(questions):
                         content = all_answers_content[start_pos:end_pos].strip()
                         
                         # 过滤掉已经处理过的内容
-                        if any(marker in content for marker in ["【小问", "【答案】", "【点睛】"]):
+                        if any(marker in content for marker in ["【小问", "【答案】", "【点睛】"]): #目测没有用，分到对应小题只有第一题有小问|答案|   点睛放置在大题answers中
                             continue
                         
                         # 分配给对应小题
@@ -628,30 +677,48 @@ def prepare_final_questions(questions):
                         point_idx = current_answers.find("【点睛】")
                         current_answers = current_answers[:point_idx].strip()
                     
-                    # 主要修改：保留答案和分析，只删除其他小题的详解
-                    for other_num in range(1, 100):
-                        if other_num != current_sub_number:
-                            other_detail_marker = f"【小问{other_num}详解】"
-                            if other_detail_marker in current_answers:
-                                # 找出其他小题详解标记位置
-                                other_marker_start = current_answers.find(other_detail_marker)
-                                
-                                # 找出下一个详解标记或点睛标记作为结束
-                                next_marker_match = re.search(r'【小问\d+详解】|【点睛】', current_answers[other_marker_start + len(other_detail_marker):])
-                                if next_marker_match:
-                                    end_pos = other_marker_start + len(other_detail_marker) + next_marker_match.start()
-                                else:
-                                    # 如果没有下一个标记，查找下一个段落结束位置
-                                    end_pos = len(current_answers)
-                                    # 尝试找到该详解段落的结束位置
-                                    para_end = current_answers.find("\n\n", other_marker_start)
-                                    if para_end > other_marker_start:
-                                        end_pos = para_end
-                                
-                                # 只删除其他小题的详解部分，保留自己的答案和分析
-                                current_answers = current_answers[:other_marker_start] + current_answers[end_pos:]
+                    # 新增：严格过滤答案内容，只保留当前小题的答案
+                    lines = current_answers.split('\n')
+                    filtered_lines = []
                     
-                    sub_q["answers"] = current_answers.strip()
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        # 检查是否包含其他小题的标记（更严格的过滤）
+                        other_sub_matches = re.findall(r'（(\d+)）|【答案】.*?（(\d+)）', line)
+                        has_other_sub = False
+                        
+                        for match in other_sub_matches:
+                            # match 是元组，可能是 ('1', '') 或 ('', '2') 的形式
+                            for num_str in match:
+                                if num_str and int(num_str) != current_sub_number:
+                                    has_other_sub = True
+                                    break
+                            if has_other_sub:
+                                break
+                        
+                        # 只保留不包含其他小题标记的行，或明确属于当前小题的行
+                        if not has_other_sub:
+                            # 检查是否明确属于当前小题
+                            current_sub_pattern = f"（{current_sub_number}）"
+                            if current_sub_pattern in line or not re.search(r'（\d+）', line):
+                                # 进一步清理：移除行中其他小题的内容部分
+                                cleaned_line = line
+                                # 移除【答案】（其他数字）格式
+                                for other_num in range(1, 100):
+                                    if other_num != current_sub_number:
+                                        # 移除其他小题的答案标记
+                                        cleaned_line = re.sub(rf'【答案】（{other_num}）[^（]*', '', cleaned_line)
+                                # 移除（其他数字）开头的内容，但保留当前小题的
+                                if not line.startswith(f"（{current_sub_number}）"):
+                                    cleaned_line = re.sub(r'（(?!' + str(current_sub_number) + r')\d+）[^（]*', '', cleaned_line)
+                                
+                                if cleaned_line.strip():
+                                    filtered_lines.append(cleaned_line.strip())
+                    
+                    sub_q["answers"] = '\n'.join(filtered_lines).strip()
             
             # 6. 提取【点睛】部分作为大题的答案
             main_answer = ""
